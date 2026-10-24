@@ -75,11 +75,15 @@ When the script starts or restarts (`init()`):
 
 The script does not seed itself, reseed itself or detect inactivity.
 
-## Electrical notes: verify before use
+## Noon compatibility
 
-- The crow docs give an output range of about −5 V to +10 V, which makes 5 V gates a conservative default. The docs do not give an output current or output impedance figure.
-- The Noon's gate/trigger input threshold and input impedance are **not confirmed here**. Check Landscape's documentation. Most Eurorack gate inputs are high impedance and 5 V is fine. If the Noon's inputs draw significant current, or several inputs are driven from one output, put a buffer (for example a buffered mult) between crow and Noon. A voltage spec alone does not guarantee compatibility.
-- If the Noon needs a higher gate level, raise `GATE_HIGH_V` (up to crow's 10 V maximum).
+Landscape lists "Eurorack modular systems" among its strongest recommendations for driving Noon ([landscape.fm/noon](https://www.landscape.fm/noon)). Crow is a Eurorack module, so its gates can be patched straight into Noon's gate inputs.
+
+Noon has no power supply. According to the [manual](https://www.landscape.fm/s/Noon-Manual-baw6.pdf), each channel's analog circuit is "powered and controlled directly from its respective gate input". This affects the sound:
+
+- **Gate voltage changes the sound.** The manual does not set a required gate level, so `GATE_HIGH_V` is a tone control rather than a compatibility setting. The default is 5 V, a standard Eurorack gate. Crow can output up to 10 V, which gives a channel more power.
+- **Gate length matters.** The manual says sequencers that can vary gate length are "highly encouraged", and that trigger-only signals weaken the response. Channels 7 and 8 (Larynx, Bacid) work best with gates rather than triggers. That is why this script holds its gates.
+- Use one crow output per Noon gate input.
 
 ## Tests
 

@@ -12,7 +12,7 @@ BIRTH        = {[2] = true, [4] = true}  -- neighborhood sums that yield 1
 NUM_READ     = 4         -- read heads / outputs
 GENS_PER_REV = 4         -- CA generations per ring revolution
 
-GATE_HIGH_V  = 5.0       -- gate high voltage (see README re: Noon)
+GATE_HIGH_V  = 5.0       -- gate high voltage; Noon is powered by its gates (see README)
 GATE_LOW_V   = 0.0
 
 CLOCK_THRESH = 1.0       -- in1 rising-edge threshold (V)
