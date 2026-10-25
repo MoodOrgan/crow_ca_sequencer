@@ -151,6 +151,55 @@ test('wraparound: neighborhood spans ring seam', function()
   -- cell 1: 16,0,1,2,3 -> sum 2 -> 1
   assert(cells[1] == 1)
 end)
+---------------------------------------------------------------------------
+-- population mapping
+---------------------------------------------------------------------------
+-- reference population, computed independently of the script
+local function ref_pop(p)
+  local s = 0
+  for d = -2, 2 do s = s + cells[(p + d) % L] end
+  return s
+end
+
+local function freeze() boundaries = {} end  -- disable evolution
+
+test('populations 0..5 produce exactly 0..5 V', function()
+  local windows = {
+    [0] = {0, 0, 0, 0, 0},
+    [1] = {0, 0, 0, 1, 0},
+    [2] = {1, 0, 0, 0, 1},
+    [3] = {0, 1, 1, 1, 0},
+    [4] = {1, 1, 0, 1, 1},
+    [5] = {1, 1, 1, 1, 1},
+  }
+  for pop = 0, 5 do
+    start(17)
+    freeze()
+    -- read head 1 at cell 0: window is cells 15,16,0,1,2
+    local idx = {15, 16, 0, 1, 2}
+    for k = 1, 5 do cells[idx[k]] = windows[pop][k] end
+    clock(0)
+    assert(out(1) == pop, ('population %d -> %s V'):format(pop, tostring(out(1))))
+  end
+end)
+
+test('population window wraps at cells 0 and L-1', function()
+  start(17)
+  freeze()
+  cells[16] = 1; cells[15] = 1; cells[1] = 1
+  assert(population_at(0) == 3, 'p=0: ' .. population_at(0))
+  assert(population_at(16) == 3, 'p=16: ' .. population_at(16)) -- 14,15,16,0,1
+  assert(population_at(1) == 2, 'p=1: ' .. population_at(1))   -- 16,0,1,2,3
+end)
+
+test('centre cell 0 can still produce nonzero output', function()
+  start(17)
+  freeze()
+  cells[16] = 1; cells[1] = 1  -- centre cell 0 stays 0
+  clock(0)
+  assert(cells[0] == 0)
+  assert(out(1) == 2, 'expected 2 V, got ' .. out(1))
+end)
 
 ---------------------------------------------------------------------------
 -- head movement
@@ -167,33 +216,28 @@ end)
 
 test('read head 1 is coincident with write head', function()
   start(17)
+  assert(offsets[1] == 0)
+  freeze()
   for _ = 1, 40 do
-    -- input high writes under write head; out1 must see that same cell
     local w = wpos
     clock(1)
-    assert(out(1) == GATE_HIGH_V)
-    assert(cells ~= nil and offsets[1] == 0)
-    assert((w + offsets[1]) % L == w)
+    assert(pending[w] == 1, 'write landed at ' .. w)
   end
 end)
 
-test('read heads observe cells at their offsets', function()
-  start(17)
-  for step = 0, 40 do
-    -- fresh ring each time with markers only at the four head positions
-    -- for head i -> cell value 1 if i is odd. Cells cleared on next set.
-    local w = wpos
-    local t = {}
-    for i = 1, 4 do t[((w + offsets[i]) % L) + 1] = (i % 2) end
-    set_cells(t)
-    local saved_boundary = boundaries
-    boundaries = {} -- disable evolution for this check
-    clock(0)
-    boundaries = saved_boundary
-    gen_idx = 1
-    for i = 1, 4 do
-      local exp = (i % 2 == 1) and GATE_HIGH_V or GATE_LOW_V
-      assert(out(i) == exp, ('step %d head %d'):format(step, i))
+test('each output reads the population at its own head (all lengths)', function()
+  for _, len in ipairs({17, 24, 19, 16}) do
+    start(len)
+    seed = 5 + len
+    for x = 0, L - 1 do cells[x] = lcg_bit() end
+    for _ = 1, 3 * len do
+      local exp = {}
+      for i = 1, 4 do exp[i] = ref_pop((wpos + offsets[i]) % L) end
+      clock(lcg_bit())
+      for i = 1, 4 do
+        assert(out(i) == exp[i], ('L=%d clock %d out %d: %s ~= %d')
+          :format(len, clock_n, i, tostring(out(i)), exp[i]))
+      end
     end
   end
 end)
@@ -244,124 +288,180 @@ test('L=17 evolves after clocks 4,8,12,17 of each revolution', function()
 end)
 
 ---------------------------------------------------------------------------
--- writing
+-- read before write
 ---------------------------------------------------------------------------
-test('high input injects before reading (out1 high same clock)', function()
+test('injected bit: all heads read pre-write state, bit stored after read', function()
   start(17)
-  assert(cells[0] == 0)
-  clock(1)
-  assert(out(1) == GATE_HIGH_V)
+  clock(1)  -- write position 0
+  for i = 1, 4 do assert(out(i) == 0, 'out ' .. i .. ' = ' .. out(i)) end
+  assert(pending[0] == 1, 'bit not stored')
+  assert(cells[0] == 0, 'bit entered ring before a generation')
+end)
+
+test('unevolved input is never heard', function()
+  -- inputs written during the first segment (clocks 1-4) must not reach any
+  -- output until the generation at the end of clock 4
+  start(17)
+  for n = 1, 4 do
+    clock(1)
+    for i = 1, 4 do assert(out(i) == 0, ('clock %d out %d'):format(n, i)) end
+  end
+end)
+
+test('ring changes only at generation boundaries', function()
+  for _, len in ipairs({17, 24, 19, 16}) do
+    start(len)
+    seed = 77 + len
+    local bset = {}
+    for _, b in ipairs(boundaries) do bset[b] = true end
+    for _ = 1, 10 * len do
+      local before = {}
+      for x = 0, L - 1 do before[x] = cells[x] end
+      local count_before = clock_count
+      clock(lcg_bit())
+      if not bset[count_before + 1] then
+        for x = 0, L - 1 do
+          assert(cells[x] == before[x], ('L=%d ring changed off-boundary'):format(len))
+        end
+      end
+    end
+  end
+end)
+
+test('evolved descendants of input reach the outputs', function()
+  start(17)
+  -- bits at cells 0 and 2 (clocks 1 and 3) merge at clock 4 and evolve to
+  -- {0,1,2}; with {2,4} a lone bit would simply die
+  clock(1); clock(0); clock(1); clock(0)
+  assert(eq_list({cells[0], cells[1], cells[2], cells[3], cells[4]}, {1, 1, 1, 0, 0}),
+    'unexpected generation')
+  local heard = false
+  for _ = 1, 17 do
+    clock(0)
+    for i = 1, 4 do if out(i) > 0 then heard = true end end
+  end
+  assert(heard, 'descendants never reached an output')
 end)
 
 test('low input never erases a cell', function()
   start(17)
   set_cells({1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
-  boundaries = {}  -- no evolution: isolate the write operation
-  for _ = 1, 17 * 2 do
-    local w = wpos
-    clock(0)
-    assert(cells[w] == 1, 'cell ' .. w .. ' erased')
-  end
+  freeze()
+  for _ = 1, 17 * 2 do clock(0) end
+  for x = 0, L - 1 do assert(cells[x] == 1, 'cell ' .. x .. ' erased') end
 end)
 
-test('output 1 is a superset of data input over long run (all lengths)', function()
-  for _, len in ipairs({17, 24, 19, 16}) do
-    start(len)
-    seed = 99 + len
-    local extra = 0
-    for _ = 1, 2000 do
-      local b = lcg_bit()
-      clock(b)
-      if b == 1 then
-        assert(out(1) == GATE_HIGH_V, 'L=' .. len .. ' clock ' .. clock_n)
-      elseif out(1) == GATE_HIGH_V then
-        extra = extra + 1
-      end
-    end
-  end
+test('pending bits OR into ring (do not clear existing cells)', function()
+  start(17)
+  cells[5] = 1
+  pending[6] = 1
+  merge_pending()
+  assert(cells[5] == 1 and cells[6] == 1 and pending[6] == 0)
 end)
 
 test('data hysteresis: value inside band holds previous bit', function()
   start(17)
+  freeze()
   input[2].volts = DATA_THRESH - DATA_HYST / 2
   input[1].change(true)
-  assert(out(1) == GATE_LOW_V, 'band from low stays low')
+  assert(pending[0] == 0, 'band from low stays low')
   input[2].volts = 5
   input[1].change(true)
-  assert(out(1) == GATE_HIGH_V)
+  assert(pending[1] == 1)
   input[2].volts = DATA_THRESH - DATA_HYST / 2
   input[1].change(true)
-  assert(out(1) == GATE_HIGH_V, 'band from high stays high')
+  assert(pending[2] == 1, 'band from high stays high')
 end)
 
 ---------------------------------------------------------------------------
--- output behavior
+-- snapshot consistency and timing
 ---------------------------------------------------------------------------
-test('consecutive active cells give one continuous gate (no low writes)', function()
+test('all four populations come from one snapshot (incl. boundary clocks)', function()
   start(17)
-  for _ = 1, 10 do clock(1) end
-  local o1 = {}
-  for _, e in ipairs(log) do if e.out == 1 then o1[#o1 + 1] = e end end
-  assert(#o1 == 1 and o1[1].v == GATE_HIGH_V,
-    'out1 should be written high exactly once, got ' .. #o1 .. ' writes')
+  seed = 3
+  for x = 0, L - 1 do cells[x] = lcg_bit() end
+  for _ = 1, 17 * 4 do
+    local exp = {}
+    for i = 1, 4 do exp[i] = ref_pop((wpos + offsets[i]) % L) end
+    -- make every write high, so any read-after-write would show up
+    clock(1)
+    for i = 1, 4 do assert(out(i) == exp[i], 'clock ' .. clock_n .. ' out ' .. i) end
+  end
 end)
 
-test('outputs only change inside on_clock step 4; evolution writes nothing', function()
-  start(17)
-  seed = 7
-  for _ = 1, 17 * 4 do clock(lcg_bit()) end
-  log = {}
-  -- running ca_step directly must not touch outputs
-  for _ = 1, 10 do ca_step() end
-  assert(#log == 0, 'ca_step wrote outputs')
-end)
-
-test('no extra transitions at generation boundaries', function()
-  -- Each clock produces at most one write per output, and only when the
-  -- read value changed: so writes per clock <= 4 and never a high->low->high
-  -- blip within one clock.
+test('every clock writes each output exactly once', function()
   start(17)
   seed = 31
-  for _ = 1, 17 * 20 do clock(lcg_bit()) end
+  local n = 17 * 20
+  for _ = 1, n do clock(lcg_bit()) end
   local per = {}
   for _, e in ipairs(log) do
     local k = e.clock * 10 + e.out
     per[k] = (per[k] or 0) + 1
-    assert(per[k] == 1, 'output ' .. e.out .. ' written twice on clock ' .. e.clock)
   end
-  -- and consecutive writes to an output always alternate level
-  local last = {}
+  for c = 1, n do
+    for i = 1, 4 do
+      assert(per[c * 10 + i] == 1, ('clock %d out %d writes: %s'):format(c, i,
+        tostring(per[c * 10 + i])))
+    end
+  end
+end)
+
+test('evolution and merging write no outputs', function()
+  start(17)
+  seed = 7
+  for _ = 1, 17 * 4 do clock(lcg_bit()) end
+  log = {}
+  for _ = 1, 10 do merge_pending(); ca_step() end
+  assert(#log == 0, 'outputs written outside on_clock')
+end)
+
+test('outputs are integer volts 0..5 with no zero inserted between steps', function()
+  start(17)
+  seed = 11
+  for x = 0, L - 1 do cells[x] = lcg_bit() end
+  for _ = 1, 17 * 10 do clock(lcg_bit()) end
   for _, e in ipairs(log) do
-    assert(last[e.out] ~= e.v, 'redundant write on out ' .. e.out)
-    last[e.out] = e.v
+    assert(e.v >= 0 and e.v <= 5 and e.v == math.floor(e.v), 'bad volts ' .. e.v)
   end
+  -- one write per output per clock (above) means a held level between
+  -- clocks; check a nonzero run stays nonzero when populations are nonzero
+  start(17)
+  freeze()
+  for x = 0, L - 1 do cells[x] = 1 end
+  for _ = 1, 17 do clock(0) end
+  for _, e in ipairs(log) do assert(e.v == 5) end
 end)
 
 test('all heads share one CA state', function()
   start(17)
-  boundaries = {}  -- freeze evolution
-  clock(1)         -- writes cell 0
-  -- head i reaches cell 0 when wpos + offset[i] == 0 (mod L)
+  freeze()
+  cells[0] = 1
   local seen = {false, false, false, false}
-  for _ = 1, 16 do
+  for _ = 1, 17 do
     local w = wpos
     clock(0)
-    for i = 2, 4 do
-      if (w + offsets[i]) % L == 0 then
-        assert(out(i) == GATE_HIGH_V, 'head ' .. i .. ' did not see cell 0')
+    for i = 1, 4 do
+      local p = (w + offsets[i]) % L
+      local d = (p - 0) % L
+      if d <= 2 or d >= L - 2 then
+        assert(out(i) == 1, 'head ' .. i .. ' did not see cell 0')
         seen[i] = true
       end
     end
   end
-  assert(seen[2] and seen[3] and seen[4])
+  assert(seen[1] and seen[2] and seen[3] and seen[4])
 end)
 
-test('reset leaves all outputs low and state cleared', function()
+---------------------------------------------------------------------------
+-- reset / regression
+---------------------------------------------------------------------------
+test('reset leaves all outputs 0 V and state cleared', function()
   start(17)
   for _ = 1, 30 do clock(1) end
   init()
-  for i = 1, 4 do assert(out(i) == GATE_LOW_V) end
-  for i = 0, L - 1 do assert(cells[i] == 0) end
+  for i = 1, 4 do assert(out(i) == 0) end
+  for i = 0, L - 1 do assert(cells[i] == 0 and pending[i] == 0) end
   assert(wpos == 0 and clock_count == 0 and gen_idx == 1)
 end)
 
@@ -369,9 +469,31 @@ test('switching L resizes ring cleanly', function()
   start(24)
   for _ = 1, 30 do clock(1) end
   start(16)
-  local n = 0
+  local n, m = 0, 0
   for _ in pairs(cells) do n = n + 1 end
-  assert(n == 16, 'cells has ' .. n .. ' entries')
+  for _ in pairs(pending) do m = m + 1 end
+  assert(n == 16 and m == 16, ('cells %d, pending %d entries'):format(n, m))
+end)
+
+test('two independent instances run identical code deterministically', function()
+  local function run(clock_bits)
+    start(17)
+    local trace = {}
+    for _, b in ipairs(clock_bits) do
+      clock(b)
+      trace[#trace + 1] = out(1) .. out(2) .. out(3) .. out(4)
+    end
+    return table.concat(trace, ' ')
+  end
+  seed = 2024
+  local bits = {}
+  for k = 1, 500 do bits[k] = lcg_bit() end
+  assert(run(bits) == run(bits), 'same input gave different output')
+end)
+
+test('default ring length is 17', function()
+  local src = io.open(script .. 'ca_seq.lua'):read('a')
+  assert(src:match('\nL%s*=%s*17%s'), 'L = 17 not the default')
 end)
 
 print(('\n%d passed, %d failed'):format(passed, failed))
