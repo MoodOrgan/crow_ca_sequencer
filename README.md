@@ -2,7 +2,7 @@
 
 A four-channel voltage sequencer for [monome crow](https://monome.org/docs/crow/), built to drive four voices of a Landscape Noon.
 
-A one-dimensional binary cellular automaton runs on a ring of `L` cells. Four read heads move around the ring. Each one outputs the number of live cells in the five-cell window around it, as 0–5 V. A write head, coincident with read head 1, ORs an external binary signal into the ring. The script has no randomness and no presets. It starts silent, and the data you feed it is the only thing that brings it to life.
+A one-dimensional binary cellular automaton runs on a ring of `L` cells. Four read heads move around the ring. Each one outputs a voltage set by the number of live cells in the five-cell window around it: 0–10 V in 2 V steps by default. A write head, coincident with read head 1, ORs an external binary signal into the ring. The script has no randomness and no presets. It starts silent, and the data you feed it is the only thing that brings it to life.
 
 Input is never heard directly. Incoming bits wait in a pending buffer and only enter the ring at the next generation, where they are evolved straight away. The automaton therefore sets both the timing and the voltage of every output.
 
@@ -16,24 +16,24 @@ The original v1 spec is in [`CLAUDE.md`](CLAUDE.md).
 |---|---|
 | in 1 | Clock. Each rising edge through 1.0 V (0.1 V hysteresis) advances the sequencer one step. |
 | in 2 | Binary data. It is sampled once per clock: high (≥ 1.0 V) marks the cell under the write head for injection at the next generation, and low changes nothing. |
-| out 1–4 | Held voltages from read heads 1–4. Each one equals the five-cell population at its head, from 0 to 5 V in whole volts. |
+| out 1–4 | Held voltages from read heads 1–4: the five-cell population at each head × `VOLTS_PER_CELL` (2 V by default, giving 0–10 V). |
 
 ## Output voltage
 
 For a read head at cell `p`, the output is the population of `[p-2 … p+2]`, with indices wrapping modulo `L`:
 
-| Live cells in window | Output |
+| Live cells in window | Output (default 2 V per cell) |
 |---|---|
 | 0 | 0 V |
-| 1 | 1 V |
-| 2 | 2 V |
-| 3 | 3 V |
-| 4 | 4 V |
-| 5 | 5 V |
+| 1 | 2 V |
+| 2 | 4 V |
+| 3 | 6 V |
+| 4 | 8 V |
+| 5 | 10 V |
 
-There is no scaling, offset or curve. The centre cell does not decide whether the output is on: a 0 in the centre with live neighbours still produces a voltage. Each output acts as a moving sensor of local density.
+The output is the population multiplied by `VOLTS_PER_CELL`, with no offset or curve. With 1 V per cell the outputs were too quiet for Noon, so the default is 2 V, which puts a full window at crow's 10 V maximum. Keep `VOLTS_PER_CELL` at 2 or below. The centre cell does not decide whether the output is on: a 0 in the centre with live neighbours still produces a voltage. Each output acts as a moving sensor of local density.
 
-Each output holds its voltage until the next clock. The script never adds triggers, zero gaps, slew or envelopes, and it does not touch the outputs at generation boundaries. A run of nonzero populations such as `0,1,3,4,2,2,0` comes out as one continuous stepped voltage: 0 V, 1 V, 3 V, 4 V, 2 V, 2 V, 0 V.
+Each output holds its voltage until the next clock. The script never adds triggers, zero gaps, slew or envelopes, and it does not touch the outputs at generation boundaries. A run of populations such as `0,1,3,4,2,2,0` comes out as one continuous stepped voltage: 0 V, 2 V, 6 V, 8 V, 4 V, 4 V, 0 V.
 
 ## Install
 
@@ -57,6 +57,7 @@ These are constants at the top of `ca_seq.lua`:
 | `RADIUS` | 2 | Five-cell neighborhood, used by both the rule and the population window |
 | `BIRTH` | `{2,4}` | Neighborhood sums that produce a live cell (totalistic) |
 | `GENS_PER_REV` | 4 | CA generations per ring revolution |
+| `VOLTS_PER_CELL` | 2.0 | Output volts per live cell. 2.0 gives 0–10 V. |
 | `CLOCK_THRESH`, `CLOCK_HYST` | 1.0, 0.1 | Input 1 edge detection |
 | `DATA_THRESH`, `DATA_HYST` | 1.0, 0.2 | Input 2 threshold. Hysteresis keeps the previous bit while the voltage sits inside the band. |
 
@@ -72,7 +73,7 @@ Offsets and generation timing are calculated from `L`. Each of the 4 segments ge
 ## Order of operations on each clock
 
 1. Take the five-cell populations at all four read heads from one snapshot of the ring.
-2. Set all four outputs (`output[n].volts = population`).
+2. Set all four outputs (`output[n].volts = population × VOLTS_PER_CELL`).
 3. Sample in 2 and convert it to a bit.
 4. OR the bit into the **pending** buffer at the write head.
 5. Advance all heads by one cell, modulo `L`.
@@ -99,7 +100,7 @@ Landscape lists "Eurorack modular systems" among its strongest recommendations f
 
 Noon has no power supply. According to the [manual](https://www.landscape.fm/s/Noon-Manual-baw6.pdf), each channel's analog circuit is "powered and controlled directly from its respective gate input". This affects the sound:
 
-- **Voltage changes the sound.** The 0–5 V population output therefore sets how hard each voice is driven, step by step. The manual also notes that pitch CV sent to the gate inputs produces "additional behaviors".
+- **Voltage changes the sound.** The population output therefore sets how hard each voice is driven, step by step. The manual also notes that pitch CV sent to the gate inputs produces "additional behaviors".
 - **Gate length matters.** The manual says sequencers that can vary gate length are "highly encouraged", and that trigger-only signals weaken the response. Channels 7 and 8 (Larynx, Bacid) work best with gates rather than triggers. That is why this script holds its voltages.
 - Use one crow output per Noon gate input.
 
@@ -114,7 +115,7 @@ lua test/test_ca_seq.lua
 It covers:
 
 - The CA rule: all neighborhood sums, synchronous update and wraparound.
-- The population mapping: 0–5 V, wraparound, and a nonzero output when the centre cell is 0.
+- The population mapping: 0–5 cells × `VOLTS_PER_CELL`, wraparound, and a nonzero output when the centre cell is 0.
 - Head geometry and the generation schedules for all four lengths.
 - Read-before-write: unevolved input is never heard, the ring only changes at generation boundaries, and evolved descendants do reach the outputs.
 - OR-writing and data hysteresis.

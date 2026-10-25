@@ -1,6 +1,6 @@
 --- crow cellular automaton percussion sequencer (v2)
 -- in1: clock (rising edges)   in2: binary data (sampled on each clock)
--- out1-4: held voltages = five-cell population (0-5 V) under four read heads
+-- out1-4: held voltages = five-cell population x VOLTS_PER_CELL under four read heads
 --         on a radius-2 totalistic {2,4} ring
 -- input bits are held pending and only enter the ring at the next generation,
 -- so nothing is heard until it has been evolved
@@ -14,6 +14,8 @@ RADIUS       = 2         -- neighborhood radius (5 cells)
 BIRTH        = {[2] = true, [4] = true}  -- neighborhood sums that yield 1
 NUM_READ     = 4         -- read heads / outputs
 GENS_PER_REV = 4         -- CA generations per ring revolution
+
+VOLTS_PER_CELL = 2.0     -- output volts per live cell (population 0-5 -> 0-10 V)
 
 CLOCK_THRESH = 1.0       -- in1 rising-edge threshold (V)
 CLOCK_HYST   = 0.1       -- in1 hysteresis (V)
@@ -121,13 +123,13 @@ local function sample_data()
 end
 
 function on_clock()
-  -- 1-2. snapshot all four populations, then set outputs (volts = population)
+  -- 1-2. snapshot all four populations, then set outputs (volts = population x VOLTS_PER_CELL)
   local pop = {}
   for i = 1, NUM_READ do
     pop[i] = population_at((wpos + offsets[i]) % L)
   end
   for i = 1, NUM_READ do
-    output[i].volts = pop[i]
+    output[i].volts = pop[i] * VOLTS_PER_CELL
   end
 
   -- 3-4. sample data, OR into the pending cell under the write head
