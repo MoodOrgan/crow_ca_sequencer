@@ -1,6 +1,7 @@
 --- crow cellular automaton percussion sequencer (v2)
 -- in1: clock (rising edges)   in2: binary data (sampled on each clock)
--- out1-4: held voltages = five-cell population x VOLTS_PER_CELL under four read heads
+-- out1-4: held voltages from the five-cell population under four read heads
+--         (0 cells -> 0 V; 1..5 cells -> V_MIN..V_MAX evenly)
 --         on a radius-2 totalistic {2,4} ring
 -- input bits are held pending and only enter the ring at the next generation,
 -- so nothing is heard until it has been evolved
@@ -15,7 +16,8 @@ BIRTH        = {[2] = true, [4] = true}  -- neighborhood sums that yield 1
 NUM_READ     = 4         -- read heads / outputs
 GENS_PER_REV = 4         -- CA generations per ring revolution
 
-VOLTS_PER_CELL = 2.0     -- output volts per live cell (population 0-5 -> 0-10 V)
+V_MIN        = 3.0       -- output volts for population 1
+V_MAX        = 5.0       -- output volts for population 5 (population 0 -> 0 V)
 
 CLOCK_THRESH = 1.0       -- in1 rising-edge threshold (V)
 CLOCK_HYST   = 0.1       -- in1 hysteresis (V)
@@ -103,6 +105,13 @@ function merge_pending()
   end
 end
 
+-- output voltage for a population: 0 -> 0 V, 1..5 evenly spaced V_MIN..V_MAX
+function population_volts(pop)
+  if pop == 0 then return 0 end
+  local top = 2 * RADIUS + 1
+  return V_MIN + (pop - 1) * (V_MAX - V_MIN) / (top - 1)
+end
+
 -- number of active cells in the five-cell window centred on p
 function population_at(p)
   local sum = 0
@@ -123,13 +132,13 @@ local function sample_data()
 end
 
 function on_clock()
-  -- 1-2. snapshot all four populations, then set outputs (volts = population x VOLTS_PER_CELL)
+  -- 1-2. snapshot all four populations, then set outputs
   local pop = {}
   for i = 1, NUM_READ do
     pop[i] = population_at((wpos + offsets[i]) % L)
   end
   for i = 1, NUM_READ do
-    output[i].volts = pop[i] * VOLTS_PER_CELL
+    output[i].volts = population_volts(pop[i])
   end
 
   -- 3-4. sample data, OR into the pending cell under the write head

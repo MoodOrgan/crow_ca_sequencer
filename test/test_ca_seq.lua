@@ -49,8 +49,12 @@ local function clock(bit)
   input[1].change(true)
 end
 
--- outputs read back as populations (volts / VOLTS_PER_CELL)
-local function out(i) return output[i].volts / VOLTS_PER_CELL end
+-- outputs read back as populations (inverse of population_volts)
+local function vpop(v)
+  if v == 0 then return 0 end
+  return (v - V_MIN) / ((V_MAX - V_MIN) / 4) + 1
+end
+local function out(i) return vpop(output[i].volts) end
 
 local function set_cells(t)
   for i = 0, L - 1 do cells[i] = t[i + 1] or 0 end
@@ -184,15 +188,17 @@ test('populations 0..5 produce exactly 0..5 V', function()
   end
 end)
 
-test('output volts = population x VOLTS_PER_CELL, max within crow range', function()
-  assert(VOLTS_PER_CELL == 2.0, 'default scale changed')
-  assert(5 * VOLTS_PER_CELL <= 10, 'full population exceeds crow 10 V')
+test('population -> volts: 0 V, then 3..5 V evenly', function()
+  local expect = {[0] = 0, 3.0, 3.5, 4.0, 4.5, 5.0}
+  for pop = 0, 5 do
+    assert(population_volts(pop) == expect[pop],
+      ('pop %d -> %s V'):format(pop, tostring(population_volts(pop))))
+  end
   start(17)
   freeze()
-  for x = 0, L - 1 do cells[x] = 0 end
   cells[16] = 1; cells[0] = 1; cells[1] = 1
   clock(0)
-  assert(output[1].volts == 3 * VOLTS_PER_CELL, 'got ' .. output[1].volts)
+  assert(output[1].volts == 4.0, 'got ' .. output[1].volts)
 end)
 
 test('population window wraps at cells 0 and L-1', function()
@@ -434,7 +440,7 @@ test('outputs are integer volts 0..5 with no zero inserted between steps', funct
   for x = 0, L - 1 do cells[x] = lcg_bit() end
   for _ = 1, 17 * 10 do clock(lcg_bit()) end
   for _, e in ipairs(log) do
-    local p = e.v / VOLTS_PER_CELL
+    local p = vpop(e.v)
     assert(p >= 0 and p <= 5 and p == math.floor(p), "bad volts " .. e.v)
   end
   -- one write per output per clock (above) means a held level between
@@ -443,7 +449,7 @@ test('outputs are integer volts 0..5 with no zero inserted between steps', funct
   freeze()
   for x = 0, L - 1 do cells[x] = 1 end
   for _ = 1, 17 do clock(0) end
-  for _, e in ipairs(log) do assert(e.v == 5 * VOLTS_PER_CELL) end
+  for _, e in ipairs(log) do assert(e.v == V_MAX) end
 end)
 
 test('all heads share one CA state', function()
